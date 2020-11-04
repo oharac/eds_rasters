@@ -1,0 +1,187 @@
+---
+title: "EDS Raster workshop"
+author: "Casey O'Hara"
+date: "11/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Session outline:
+
+- make a cell ID raster from scratch, using extent and CRS of an EEZ polygon, assign numeric cell IDs.
+    - note similarities and differences to Mike's workshop
+    - writeRaster
+- write a function to take a raster and a polygon and plot them together
+- rasterize the EEZ polygon to create a mask.
+- use rasterFromXYZ to rasterize a dataframe of AquaMaps cell IDs
+- projectRaster from an existing raster (AquaMaps cell IDs) to the new CRS, resolution, and extent
+- use subs to assign values from a single species into the cell IDs
+- plot it
+- use tidyverse to create a species richness dataframe
+- use subs again, then mask it to the EEZ
+
+- raster math
+- calc
+- reclassify
+- zonal
+
+- values to create a dataframe
+
+``` {r}
+### load packages.  Since raster has a "select" function but we more often
+### use the tidyverse::select, load raster first, and let tidyverse overwrite
+### that function.
+library(raster)
+library(tidyverse)
+library(sf)
+library(here)
+
+### get AquaMaps data and process down to Mozambique EEZ
+am_path <- '/home/shares/ohi/git-annex/globalprep/_raw_data/aquamaps/d2018'
+am_files <- list.files(am_path, full.names = TRUE)
+# [1] "hcaf_species_native_ver0816c_fixed.csv" "hcaf_species_native_ver0816c.csv"      
+# [3] "hcaf_v6.csv"                            "OHI_aquamaps_ver0816c.zip"             
+# [5] "readme.rtf"                             "speciesoccursum_ver0816c.csv" 
+
+### * the hcaf_v6.csv is a file of environmental and geospatial parameters
+###   for all the 0.5 degree cells.  (hcaf stands for Half-degree Cell
+###   Authority File) size: 177 MB
+### * the hcaf_species_native_ver0816c_fixed.csv is a file that matches
+###   cell IDs to species IDs, with a probability of occurrence, i.e., 
+###   the probability of finding that species in that cell. size: 2.3 GB
+### * speciesoccursum_ver0816c.csv is a file with all the species information
+###   including species ID number, taxonomic info, and some metadata. size: 2.7 MB
+
+### Read in the files.  data.table::fread is very very fast, much faster than
+### read.csv or read_csv - useful for big files (I usually don't bother for
+### smaller files...)
+
+### Step 1: create a raster of the AquaMaps cell IDs for Mozambique
+hcaf_df <- data.table::fread(am_files[3]) 
+# names(hcaf_df)    ### check the column names
+### This dataframe has 111 columns, and 259,200 rows.  Most of the columns are 
+### environmental info we probably don't need.  We need cell ID, lat, long, 
+### cell area, and ocean area.  There are also columns for EEZ and country,
+### but these are numeric and I'm not sure which number indicates Mozambique.
+### Let's just grab the first 10 columns.
+hcaf_df <- hcaf_df %>%
+  select(1:10) %>%
+  janitor::clean_names()
+
+### create an xyz dataframe for the raster::rasterFromXYZ function.  Use
+### loiczid as cell ID.
+xyz_df <- hcaf_df %>%
+  select(x = center_long, y = center_lat, z = loiczid)
+
+hcaf_rast <- raster::rasterFromXYZ(xyz_df)
+crs(hcaf_rast) <- '+init=epsg:4326'   ### or '+proj=longlat +datum=WGS84 +no_defs'
+plot(hcaf_rast)
+
+### Identify which cells include Mozambique.  Grab Moz EEZ and use that to set extent
+moz_eez_sf <- sf::read_sf(here('aquamaps/moz_eez/eez.shp'))
+moz_ext <- raster::extent(moz_eez_sf)
+hcaf_moz_rast <- raster::crop(hcaf_rast, moz_ext)
+
+### let's plot this.  To use ggplot, need to use rasterToPoints to make the
+### raster a plottable dataframe...
+hcaf_moz_df <- rasterToPoints(hcaf_moz_rast) %>%
+  as.data.frame()
+ggplot() +
+  geom_raster(data = hcaf_moz_df, aes(x, y, fill = z)) +
+  geom_sf(data = moz_eez_sf, color = 'yellow', fill = NA)
+### note that some of the EEZ falls outside the cells.  Add a buffer to the
+### eez polygon, then try again...
+moz_eez_buffer_sf <- sf::st_buffer(moz_eez_sf, dist = .5)
+moz_ext <- raster::extent(moz_eez_buffer_sf)
+hcaf_moz_rast <- raster::crop(hcaf_rast, moz_ext)
+
+hcaf_moz_df <- rasterToPoints(hcaf_moz_rast) %>%
+  as.data.frame()
+ggplot() +
+  geom_raster(data = hcaf_moz_df, aes(x, y, fill = z)) +
+  geom_sf(data = moz_eez_sf, color = 'yellow', fill = NA)
+### that's more like it!  Let's save this as a raster.
+writeRaster(hcaf_moz_rast, here('aquamaps/rast_base.tif'), overwrite = TRUE)
+
+### Step 2: identify the species that occur in Mozambique cells
+cell_vals <- raster::values(hcaf_moz_rast)
+am_spp_native_df <- data.table::fread(am_files[1])
+moz_spp_native_df <- am_spp_native_df %>%
+  filter(loiczid %in% raster::values(hcaf_moz_rast))
+
+head(moz_spp_native_df)
+### write that out
+write_csv(moz_spp_native_df, here('aquamaps/moz_spp_native.csv'))
+
+### finally, trim the species info sheet down to just those spp in Moz
+am_spp_info <- data.table::fread(am_files[6]) %>%
+  janitor::clean_names()
+moz_spp_info <- am_spp_info %>%
+  filter(speciesid %in% moz_spp_native_df$am_sid)
+head(moz_spp_info)
+write_csv(moz_spp_info, here('aquamaps/moz_spp_info.csv'))
+
+### map out the range of one species
+hh_df <- moz_spp_native_df %>%
+  filter(am_sid == 'Fis-23273')
+hh_rast <- raster::subs(hcaf_moz_rast, hh_df, by = 'loiczid', which = 'prob')
+plot(hh_rast)
+hh_map_df <- rasterToPoints(hh_rast) %>%
+  as.data.frame()
+ggplot() +
+  geom_raster(data = hh_map_df, aes(x, y, fill = prob)) +
+  geom_sf(data = moz_eez_sf, color = 'yellow', fill = NA)
+
+### map out the shark species richness
+sharks <- moz_spp_info %>%
+  filter(class == 'Elasmobranchii')
+sharks_df <- moz_spp_native_df %>%
+  filter(am_sid %in% sharks$speciesid)
+
+shark_richness_df <- sharks_df %>%
+  group_by(loiczid) %>%
+  summarize(n_sharks = n_distinct(am_sid))
+
+shark_richness_rast <- raster::subs(hcaf_moz_rast, shark_richness_df, 
+                                    by = 'loiczid', which = 'n_sharks')
+plot(shark_richness_rast)
+shark_map_df <- rasterToPoints(shark_richness_rast) %>%
+  as.data.frame()
+ggplot() +
+  geom_raster(data = shark_map_df, aes(x, y, fill = n_sharks)) +
+  geom_sf(data = moz_eez_sf, color = 'yellow', fill = NA)
+
+### make a mask of Moz EEZ
+moz_eez_rast <- fasterize::fasterize(moz_eez_sf, hcaf_moz_rast)
+
+moz_eez_6933_sf <- sf::st_transform(moz_eez_sf, 6933)
+hcaf_moz_6933_rast <- raster::projectRaster(hcaf_moz_rast, res = 10000,
+                                            method = 'ngb',
+                                            crs = '+init=epsg:6933')
+plot(hcaf_moz_6933_rast)
+moz_eez_6933_rast <- fasterize::fasterize(moz_eez_6933_sf, hcaf_moz_6933_rast)
+plot(moz_eez_6933_rast)
+
+shark_richness_rast <- raster::subs(hcaf_moz_6933_rast, shark_richness_df, 
+                                    by = 'loiczid', which = 'n_sharks') %>%
+  raster::mask(moz_eez_6933_rast)
+plot(shark_richness_rast)
+
+
+### distance raster example
+dist_rast <- raster::distance(moz_eez_6933_rast)
+plot(dist_rast)
+
+### cell ID example
+cell_id_rast <- moz_eez_6933_rast ### initialize it with a raster with the right resolution, CRS, and extent
+values(cell_id_rast) <- 1:ncell(cell_id_rast) ### put in unique numbers for cell values
+plot(cell_id_rast)
+
+### raster to polygon example
+hcaf_moz_poly <- raster::rasterToPolygons(hcaf_moz_rast, dissolve = FALSE)
+moz_eez_poly <- raster::rasterToPolygons(moz_eez_rast, dissolve = TRUE)
+plot(moz_eez_poly)
+```
