@@ -1,5 +1,5 @@
 ---
-title: "EDS Raster workshop"
+title: "EDS Raster workshop 1: preparing rasters"
 author: "Casey O'Hara"
 date: "11/2/2020"
 output: html_document
@@ -19,28 +19,24 @@ library(fasterize)
 library(here)
 ```
 
-Session outline:
+# Session summary
 
-- make a cell ID raster from scratch, using extent and CRS of an EEZ polygon, assign numeric cell IDs.
-    - note similarities and differences to Mike's workshop
-    - writeRaster
-- write a function to take a raster and a polygon and plot them together
-- rasterize the EEZ polygon to create a mask.
-- use rasterFromXYZ to rasterize a dataframe of AquaMaps cell IDs
-- projectRaster from an existing raster (AquaMaps cell IDs) to the new CRS, resolution, and extent
-- use subs to assign values from a single species into the cell IDs
-- plot it
-- use tidyverse to create a species richness dataframe
-- use subs again, then mask it to the EEZ
+For this EcoDataScience session, we will cover some basics of working with spatial data presented in a gridded format, i.e., rasters.  This is distinct from vector data, such as points, lines, and polygons, which are not constrained to a grid but have problems of their own.  This will be an overview of rasters, introducing basic concepts of creating them, modifying them, and doing basic analyses wih them.
 
-- raster math
-- calc
-- reclassify
-- zonal
+# Creating a raster
 
-- values to create a dataframe
+As with many things in R, there are many ways to create rasters depending on the information you have to start.  There are several parameters that every raster must have:
 
-``` {r}
+* A coordinate reference system (CRS), i.e., a system to locate things spatially on the surface of the earth - basically a definition of the shape of the globe (hint: not a sphere), some way to identify where X = 0 and Y = 0, and quite likely some projection to convert curved space into flat space.  Includes units, often degrees or meters.
+* An origin, i.e., what is the spatial coordinate of the grid point closest to (0, 0), sort of like how far is your grid offset from a perfect alignment.
+* A resolution, i.e., what is the length of the sides of each grid cell, in both X and Y.  This is in units given in the coordinate reference system.
+* An extent, i.e., what are the corners of the box that bounds your raster.
+
+If you want to use multiple rasters in an analysis, these generally all have to match up for all your rasters.
+
+## Creating a raster from X and Y coordinates on a regular grid
+
+``` {r create raster using rasterFromXYZ}
 ### Read a truncated version of the AquaMaps Half-degree Cell
 ### Authority File (HCAF) - cell IDs, locations, ocean area, in a dataframe
 hcaf_df <- read_csv(here('_data/am_hcaf.csv'))
@@ -66,11 +62,18 @@ plot(hcaf_rast)
 writeRaster(hcaf_rast, here('_spatial/hcaf_rast.tif'), overwrite = TRUE)
 ```
 
+## Creating a raster from scratch
+
 ```{r manually create the same raster from scratch}
 hcaf_rast2 <- raster(xmn = -180, xmx = 180, ymn = -90, ymx = 90,
                      res = 0.5,
                      crs = '+init=epsg:4326')
+
+### THe LOICZID values are not tricky - they start at 1 in upper left, increase
+### as you moving right, then at the end of the first row, drop to the leftmost
+### cell in the second row, etc.  We can fill those values easily:
 values(hcaf_rast2) <- 1:ncell(hcaf_rast2)
+
 ### NOTE: if you saw the previous gridded climate data workshop, Mike created
 ### a raster from scratch using a matrix - this filled the values in columns
 ### (top to bottom), then left to right by column.  This method fills the
@@ -86,6 +89,8 @@ raster::compareRaster(hcaf_rast, hcaf_rast2, values = TRUE)
 
 ### no need to save, we already have one that works just fine...
 ```
+
+## Use `subs()` to substitute raster cell values for other values in a dataframe
 
 ```{r examine ocean area by cell}
 ocean_area_df <- hcaf_df %>%
@@ -103,7 +108,13 @@ writeRaster(pct_ocean_rast, here('_spatial/ocean_rast.tif'),
             overwrite = TRUE)
 ```
 
-Load and examine the AquaMaps information on sharks:
+Note: we could have used `rasterFromXYZ()` here too, simply using `x` = longitude, y` = latitude, and percent ocean area as the `z` value.
+
+# Practice with `subs()` on real data
+
+The nice thing about `raster::subs()` is that we can do a lot of work in the Tidyverse and then simply plop the results into a previously generated raster, based on cell IDs.
+
+Load and examine the AquaMaps information on sharks, as dataframes:
 
 * taxonomic information on sharks found in the region
 * a lookup table that maps shark species IDs to cell IDs
@@ -139,10 +150,13 @@ writeRaster(hh_range_rast, here('_spatial/hammerhead_rast_hcaf.tif'),
             overwrite = TRUE)
 ```
 
+# Reprojecting a raster
 
-Let's use the Mozambique preferred CRS instead of generic WGS84 lat-long.  We will create a new base raster for analysis, at a 10 km resolution equal area, in the same CRS as provided by WCS.
+Often we are given a raster in a resolution and/or coordinate reference system that is different from our other sources of data.  We can reproject a raster to new parameters (origin, resolution, extent, and CRS) using `raster::projectRaster()`.  Note, for vector data, we can use `st_transform` (if using `sf` spatial formats) or `spTransform` (if using `rgdal`/`sp` spatial formats)
 
-``` {r}
+Our AquaMaps data is in a generic lat-long format, but for Mozambique, they prefer to use a different CRS.  Since the results will be used by WCS scientists in Mozambique, let's use the Mozambique preferred CRS.  We will create a new base raster for analysis, at a 10 km resolution equal area, in the same CRS as provided by WCS in a shapefile of SE Africa EEZs.
+
+``` {r reproject wgs84 raster to mozambique crs}
 se_afr_eez_sf <- read_sf(here('_spatial/moz_eez', 
                               'Mozambique_EEZ_WGS_84_NSIDC_EASE_Grid_2_0_Global.shp'))
 # crs(se_afr_eez_sf) 
@@ -163,9 +177,9 @@ hcaf_rast_reproj <- projectRaster(hcaf_rast_crop,
 plot(hcaf_rast_reproj)
 ```
 
-And important understanding: we've reprojected half-degree cells, each with a unique ID, to 10 km x 10 km cells.  These new cells are smaller, but still contain the same cell ID as the original larger cell, because we used "nearest neighbor" i.e., `method = "ngb"`.  This means that there are multiple cells at the finer resolution to make up the same area as the larger cells at the coarser resolution.
+And important understanding: we've reprojected half-degree cells (around 55 km x 55 km at the equator), each with a unique cell ID, to 10 km x 10 km cells.  These new smaller cells are diced versions of the larger cells, but still contain the same cell IDs as the original larger cell, because we used "nearest neighbor" i.e., `method = "ngb"`.
 
-```{r}
+```{r compare low-res to high-res versions for cell counts}
 values_lo_res <- values(hcaf_rast_crop)
 ### make a table of number of cells for each values; use 'head()' just to see 
 ### the first 20 instances
@@ -177,8 +191,15 @@ table(values_hi_res) %>% head(20)
 ### between 24 and 30 cells per cell ID value
 ```
 
+We can see there are (at least for these first few cell IDs) 24 or 30 new 10km x 10km cells from each old 0.5° x 0.5° cell.
 
-``` {r}
+# Plotting with rasters
+
+We've been using the base `plot` function to plot our rasters.  It works fine, but is not fancy.  We'll keep using that for simple plots, but we can also use `ggplot2` to plot our rasters, using the `geom_raster()` function.  However, we can't just plop in the raster itself - we have to turn it into a dataframe of coordinates (`ggplot2` likes dataframes!).  Just as before we used `rasterFromXYZ`, here we can use `rasterToPoints()` to go the other direction.
+
+Note `geom_sf` works with simple features polygons just fine.
+
+``` {r reproject hammerhead range and plot it}
 ### Let's transform the hammerhead range to the Mozambique CRS.
 ### could do either of these:
 ### * projectRaster() from half-degree cells to 10 km cells
@@ -197,14 +218,19 @@ ggplot() +
 
 ```
 
-``` {r plot_rast utility function}
+## Creating a `plot_rast()` function
+
+Because I'd like to keep plotting rasters with polygons on top for reference, I will create a function to let me use a single line of code.
+
+``` {r set up plot_rast utility function}
 ### The above lines of code to plot the raster with the sf 
 ### are coded into a function here, for future ease of use:
 plot_rast <- function(rast, sf) {
   ### function to plot a raster with a simple features border overlaid
-  
+  rast_crs <- as.character(crs(rast))
+  sf_crs <- as.character(crs(sf))
   ### error check: make sure CRS are equal
-  if(as.character(crs(rast)) != crs(sf)) {
+  if(rast_crs != sf_crs) {
     error_msg <- sprintf('CRS mismatch!\n    raster: %s\n    sf: %s',
                          as.character(crs(rast)), crs(sf))
     stop(error_msg) ### stops everything and communicates an error
@@ -229,11 +255,15 @@ plot_rast(hh_range_reproj, se_afr_eez_sf)
 ```
 Note that the square cells don't line up well with the smoother coastline...
 
+# Rasterizing polygons
+
+There are several ways to turn a polygon into a raster, but we will need to know the target parameters (origin, resolution, extent, CRS).  Often we will already have these inside an existing raster object.
+
 Let's make a mask of just the Mozambique EEZ, and clip this regional raster down to just that.  We will use `fasterize::fasterize()`, but could also do with `raster::rasterize()`.  `rasterize()` used to have some bugs in it, and may still, so I tend to prefer `fasterize()`.  
 
-NOTE: `fasterize()` works with simple features `sf` objects and converts them to rasters based on a raster template you provide.
+NOTE: `fasterize()` works with simple features `sf` objects, and must be provided a raster template, while `rasterize()` can work on older `sp` objects and allows you many ways to set the target parameters.
 
-```{r}
+```{r create mozambique eez mask}
 se_afr_eez_df <- se_afr_eez_sf %>%
   as.data.frame() %>%
   select(-geometry)
@@ -253,9 +283,11 @@ hh_range_moz <- raster::mask(hh_range_reproj, moz_eez_rast)
 plot_rast(hh_range_moz, moz_eez_sf)
 ```
 
-Let's make a species richness map, counting how many species can be found in each cell.  To do this, we can use the dataframe of shark species to cells, `am_spp_cells`.  For each cell, we can count up how many distinct species IDs occur.
+# More `subs()` with a simple analysis
 
-Note: this ignores probability - so even 1% probability is counted... but that's easy to fix!
+Let's make a species richness map, by counting how many distinct shark species can be found in each cell.  To do this, we can use the dataframe of shark species to cells, `am_spp_cells`.  For each cell, we can count up how many distinct species IDs occur.
+
+Note: this ignores probability - so even 1% probability is counted... but that's easy to fix! (i.e., `filter(prob >= 0.50)` to keep cells where probability is 50% or higher)
 ``` {r species richness map}
 ### map out the shark species richness
 shark_richness_df <- am_spp_cells %>%
@@ -267,34 +299,14 @@ shark_richness_rast <- raster::subs(hcaf_rast_reproj, shark_richness_df,
 plot_rast(shark_richness_rast, moz_eez_sf)
 ```
 
-Review: what have we done so far?
+# Review: what have we done so far?
 
 * created a raster from evenly-spaced lat-long data
-* created a raster from scratch using an extent/bounding box (xmin, xmax, ymin, ymax) and resolution
+* created a raster from scratch by directly giving parameters - an extent/bounding box (xmin, xmax, ymin, ymax), resolution, and CRS
 * added a coordinate reference system to a raster, and checked it.
 * used `raster::subs()` to substitute desired values into a raster, replacing cell ID values
-* plotted a raster quickly using base plotting
-* used `raster::trim()` to remove excess NA values from a raster
+* plotted a raster quickly using base plot function.
+* used `raster::trim()` to remove excess NA values (i.e. whitespace border) from a raster
 * used `raster::projectRaster()` to reproject an existing raster to the parameters (extent, origin, resolution, CRS) of a different raster
 * plotted a raster using `ggplot2::geom_raster()` by converting the raster to a dataframe
 * plotted a simple features polygon on top of the raster using `ggplot2::geom_sf()`
-
-
-More examples for other parts of workshop
-
-```
-### distance raster example
-dist_rast <- raster::distance(se_afr_eez_6933_rast)
-plot(dist_rast)
-
-### cell ID example
-cell_id_rast <- se_afr_eez_6933_rast ### initialize it with a raster with the right resolution, CRS, and extent
-values(cell_id_rast) <- 1:ncell(cell_id_rast) ### put in unique numbers for cell values
-plot(cell_id_rast)
-
-### raster to polygon example
-hcaf_moz_poly <- raster::rasterToPolygons(hcaf_moz_rast, dissolve = FALSE)
-se_afr_eez_poly <- raster::rasterToPolygons(se_afr_eez_rast, dissolve = TRUE)
-plot(se_afr_eez_poly)
-```
-
