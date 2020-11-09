@@ -1,0 +1,123 @@
+---
+title: "EDS Raster workshop 2: analyzing with rasters"
+author: "Casey O'Hara"
+date: "11/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, messages = FALSE, warnings = FALSE)
+
+### load packages.  Since raster has a "select" function but we more often
+### use the tidyverse::select, load raster first, and let tidyverse overwrite
+### that function.
+
+library(raster)
+library(tidyverse)
+library(sf)
+library(fasterize)
+library(here)
+```
+ 
+# Summary
+ 
+The previous script focused on creating and developing rasters in preparation for analysis.  Here we'll do a little more , but focus on different ways you can use rasters to perform an analysis.
+
+# Basic raster math
+
+Since rasters are just a grid of numeric values, we can do the same operations on a raster as we can with a basic vector.  Here we'll walk through some basic but totally useless examples based on the rasters we already created.
+
+```{r}
+### operating on a vector
+vec <- 1:10
+vec * 2  ### multiply by a scalar
+vec + 20 ### add a scalar
+
+eez_rast <- raster(here('_spatial/se_afr_eez_6933.tif'))
+plot(eez_rast)
+eez_rast     ### note the values: 1 to 9
+eez_rast + 5 ### note the values: 6 to 14
+eez_rast * 2 ### note the values: 2 to 18
+plot(eez_rast^3)
+### note, plotting linear transformations will look exactly the same, since R
+### chooses the palette to fill out the entire range.  The numbers on the 
+### colorbar would change though!
+```
+
+We can also add, subtract, multiply, or divide by a raster with the same parameters.
+
+```{r}
+hh_rast <- raster(here('_spatial/hh_rast_6933.tif'))
+plot(hh_rast)
+plot(hh_rast + eez_rast)
+```
+
+You can also use indexing to change value in one raster based on the value in another raster.  Use the `raster::values()` function to basically convert the raster values into a vector that's less ambiguous to work with.  We already did this to fill in gaps in the silky shark range.
+```{r}
+x <- values(eez_rast)
+unique(x) ### each number corresponds to an EEZ; Mozambique is 5
+hh_rast2 <- hh_rast ### copy it over
+
+### keep all shark probabilities in Moz, but set all outside the Moz EEZ to -1
+values(hh_rast2)[values(eez_rast != 5) & !is.na(values(hh_rast))] <- -1
+plot(hh_rast2)
+
+### could also set non-Moz EEZ values to NA, basically applying a mask.
+```
+
+
+How can you use this basic raster math?
+
+* basic combinations of rasters to quickly calculate ratios, sums, etc.
+* rescale a raster by dividing by the max value `rast_rescale <- rast / maxValue(rast)`
+* use a raster of presence/absence (as ones and zeros) to turn on or turn off values in a different raster (similar to a mask)
+* "flatten" a raster to all ones and NAs by dividing the raster by itself (something divided by itself = 1, 0 divided by 0 = NaN)
+
+```{r}
+hcaf_rast <- raster(here('_spatial/hcaf_rast_6933.tif'))
+hcaf_rescaled <- hcaf_rast / maxValue(hcaf_rast)
+plot(hcaf_rescaled)
+```
+
+
+# `raster::calc()`
+
+The `calc` function is handy for more complex calculations.  It is especially useful when you have a stack of raster layers and want to calculate across them all at once.  A raster `stack` object is just multiple layers stacked together.  A raster `brick` is similar.  At a basic level where we are now, the difference is pretty unimportant.
+
+```{r}
+### tell it a vector of files to include in the stack.
+rast_files <- list.files(here('_spatial'), pattern = '_6933.tif', full.names = TRUE)
+rast_stack <- stack(rast_files)
+plot(rast_stack)
+
+### or tell it which rasters already in memory to include in the stack.
+rast_stack <- stack(eez_rast, hh_rast, hcaf_rescaled)
+
+rast_mean <- calc(rast_stack, fun = prod, na.rm = TRUE)
+plot(rast_mean)
+```
+
+
+
+- reclassify
+- zonal
+
+- values to create a dataframe
+
+
+```
+### distance raster example
+dist_rast <- raster::distance(se_afr_eez_6933_rast)
+plot(dist_rast)
+
+### cell ID example
+cell_id_rast <- se_afr_eez_6933_rast ### initialize it with a raster with the right resolution, CRS, and extent
+values(cell_id_rast) <- 1:ncell(cell_id_rast) ### put in unique numbers for cell values
+plot(cell_id_rast)
+
+### raster to polygon example
+hcaf_moz_poly <- raster::rasterToPolygons(hcaf_moz_rast, dissolve = FALSE)
+se_afr_eez_poly <- raster::rasterToPolygons(se_afr_eez_rast, dissolve = TRUE)
+plot(se_afr_eez_poly)
+```
+

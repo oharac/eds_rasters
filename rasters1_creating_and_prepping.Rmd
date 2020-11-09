@@ -2,7 +2,15 @@
 title: "EDS Raster workshop 1: preparing rasters"
 author: "Casey O'Hara"
 date: "11/2/2020"
-output: html_document
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
 ---
 
 ```{r setup, include=FALSE}
@@ -21,7 +29,9 @@ library(here)
 
 # Session summary
 
-For this EcoDataScience session, we will cover some basics of working with spatial data presented in a gridded format, i.e., rasters.  This is distinct from vector data, such as points, lines, and polygons, which are not constrained to a grid but have problems of their own.  This will be an overview of rasters, introducing basic concepts of creating them, modifying them, and doing basic analyses wih them.
+For this EcoDataScience session, we will cover some basics of working with spatial data presented in a gridded format, i.e., rasters.  This is distinct from vector data, such as points, lines, and polygons, which are not constrained to a grid but have problems of their own.  This will be an overview of rasters, introducing basic concepts of creating them, modifying them, and doing basic analyses wih them.  This first script focuses on creating and preparing rasters to be used in an analysis.
+
+NOTE: This will not use the `stars` package, which is a massive overhaul of raster-style data for R. Because that's still in the development process, and the `raster` package is very mature, we'll use `raster` for this workshop.  But `stars` looks like it's gonna be really cool!
 
 # Creating a raster
 
@@ -127,8 +137,11 @@ am_spp_info <- read_csv(here('_data/am_shark_info.csv'))
 am_spp_cells <- read_csv(here('_data/am_shark_cells.csv'))
 ```
 
+### Scalloped hammerhead range
+![](img/hh.jpg)
+
 ```{r use subs to examine the range for scalloped hammerhead}
-### View am_spp_info and search to find ID for "scalloped hammerhead"
+### View am_spp_info and search to find ID for "scalloped hammerhead" and
 hh_id <- 'Fis-23273'
 hh_cells_df <- am_spp_cells %>%
   filter(am_sid == hh_id)
@@ -146,9 +159,30 @@ hh_range_rast <- hh_range_rast %>%
 
 hh_range_rast
 plot(hh_range_rast)
-writeRaster(hh_range_rast, here('_spatial/hammerhead_rast_hcaf.tif'),
+writeRaster(hh_range_rast, here('_spatial/hammerhead_rast.tif'),
             overwrite = TRUE)
 ```
+
+### Silky shark range
+
+![](img/ss.jpg)
+```{r use subs to examine the range for silky shark}
+### View am_spp_info and search to find ID for "silky shark" and
+ss_id <- 'Fis-23054'
+ss_cells_df <- am_spp_cells %>%
+  filter(am_sid == ss_id)
+
+### use raster::subs() to substitute in values for others
+ss_range_rast <- subs(hcaf_rast, ss_cells_df,
+                      by = 'loiczid',         ### which variable is the key
+                      which = 'prob') %>%     ### which var is the new value
+  trim()
+plot(ss_range_rast)
+
+writeRaster(ss_range_rast, here('_spatial/silkyshark_rast.tif'),
+            overwrite = TRUE)
+```
+
 
 # Reprojecting a raster
 
@@ -158,7 +192,7 @@ Our AquaMaps data is in a generic lat-long format, but for Mozambique, they pref
 
 ``` {r reproject wgs84 raster to mozambique crs}
 se_afr_eez_sf <- read_sf(here('_spatial/moz_eez', 
-                              'Mozambique_EEZ_WGS_84_NSIDC_EASE_Grid_2_0_Global.shp'))
+                              'se_afr_eez.shp'))
 # crs(se_afr_eez_sf) 
 # [1] "+proj=cea +lat_ts=30 +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
 # crs(hcaf_rast) 
@@ -175,6 +209,9 @@ hcaf_rast_reproj <- projectRaster(hcaf_rast_crop,
 # hcaf_rast_crop
 # hcaf_rast_reproj
 plot(hcaf_rast_reproj)
+
+writeRaster(hcaf_rast_reproj, here('_spatial/hcaf_rast_6933.tif'), overwrite = TRUE)
+
 ```
 
 And important understanding: we've reprojected half-degree cells (around 55 km x 55 km at the equator), each with a unique cell ID, to 10 km x 10 km cells.  These new smaller cells are diced versions of the larger cells, but still contain the same cell IDs as the original larger cell, because we used "nearest neighbor" i.e., `method = "ngb"`.
@@ -196,6 +233,8 @@ We can see there are (at least for these first few cell IDs) 24 or 30 new 10km x
 # Plotting with rasters
 
 We've been using the base `plot` function to plot our rasters.  It works fine, but is not fancy.  We'll keep using that for simple plots, but we can also use `ggplot2` to plot our rasters, using the `geom_raster()` function.  However, we can't just plop in the raster itself - we have to turn it into a dataframe of coordinates (`ggplot2` likes dataframes!).  Just as before we used `rasterFromXYZ`, here we can use `rasterToPoints()` to go the other direction.
+
+Note: putting rasters into `ggplot2::geom_raster` is not as fast as base `plot`, so generally save it for when you want to make fancy-looking plots.
 
 Note `geom_sf` works with simple features polygons just fine.
 
@@ -264,24 +303,78 @@ Let's make a mask of just the Mozambique EEZ, and clip this regional raster down
 NOTE: `fasterize()` works with simple features `sf` objects, and must be provided a raster template, while `rasterize()` can work on older `sp` objects and allows you many ways to set the target parameters.
 
 ```{r create mozambique eez mask}
+### let's convert the simple features to a dataframe, and drop the geom column so we
+### can inspect it without causing lag.
 se_afr_eez_df <- se_afr_eez_sf %>%
   as.data.frame() %>%
   select(-geometry)
 moz_eez_sf <- se_afr_eez_sf %>%
-  filter(ISO_Ter1 == 'MOZ')
+  filter(territory == 'Madagascar')
 
 ### default is to convert any cells that fall within a polygon to a value
-### of 1.  Here that's OK, but later we will set the "field" argument to
-### choose how to determine the cell values
-moz_eez_rast <- fasterize(moz_eez_sf, hcaf_rast_reproj)
+### of 1.  The "field" function lets us choose a value within the attribute
+### table to assign to the cells.  Here let's use the "id" field.
+se_afr_eez_rast <- fasterize(se_afr_eez_sf, hcaf_rast_reproj, field = 'id')
 
-plot_rast(moz_eez_rast, moz_eez_sf)
+plot_rast(se_afr_eez_rast, moz_eez_sf)
+writeRaster(se_afr_eez_rast, here('_spatial/se_afr_eez_6933.tif'), overwrite = TRUE)
 
-### Use mask to keep only cells that occur in (i.e., non-NA) the moz_eez_rast
-hh_range_moz <- raster::mask(hh_range_reproj, moz_eez_rast)
+### Use mask to keep only cells that occur in (i.e., non-NA) SE African EEZs
+hh_range_se_afr <- raster::mask(hh_range_reproj, se_afr_eez_rast)
 
-plot_rast(hh_range_moz, moz_eez_sf)
+plot(hh_range_se_afr)
+writeRaster(hh_range_se_afr, here('_spatial/hh_rast_6933.tif'), overwrite = TRUE)
 ```
+
+```{r make a masked range raster for silky shark}
+### last time we used subs(); this time let's use projectRaster() and
+### then mask it, and write it out. 
+
+### Note, there are gaps in its range, where
+### probability is zero - but they show up as NA.  Let's replace all NAs with
+### zero first, then mask, so land will go back to NA.
+x <- values(ss_range_rast) ### values accesses the raster values as a vector
+### identify the indices in the vector where NA, and replace with zero
+values(ss_range_rast)[is.na(values(ss_range_rast))] <- 0
+# plot(ss_range_rast)
+
+### now reproject, crop
+ss_range_se_afr <- projectRaster(ss_range_rast, hcaf_rast_reproj) %>%
+  mask(se_afr_eez_rast)
+plot(ss_range_se_afr)
+writeRaster(ss_range_se_afr, here('_spatial/ss_rast_6933.tif'), overwrite = TRUE)
+```
+
+## Rasterizing other types of vector data
+
+We can also rasterize vector data as lines and points.  Let's rasterize a shapefile of points indicating Mozambique ports, using our reprojected AquaMaps LOICZID raster.  
+
+* Unfortunately `fasterize` only works on `sf` polygons and multipolygons, so we will use the `raster::rasterize` function instead.  
+* But the `rasterize` function needs an older spatial format (Spatial or `sp`), so we'll resort to old-school functions to read in the points.  
+* The `sf::as()` function is great for coercing `sf` simple features to `sp` Spatial objects as in this situation, when `sf` just won't do.
+
+```{r}
+ports_sf <- read_sf(here('_spatial/moz_ports/Moz_ports_updated.shp'))
+class(ports_sf) 
+### [1] "sf"         "tbl_df"     "tbl"        "data.frame"
+st_crs(ports_sf)
+### in generic lat-long, 4326.  Need to transform it to the Mozambique CRS
+ports_sf <- ports_sf %>%
+  st_transform(crs = st_crs(moz_eez_sf))
+
+ports_sp <- as(ports_sf, 'Spatial')
+class(ports_sp)
+### [1] "SpatialPointsDataFrame"
+### attr(,"package")
+### [1] "sp"
+crs(ports_sp)
+
+ports_rast <- raster::rasterize(ports_sp, hcaf_rast_reproj, field = 'OBJECTID_1')
+plot(ports_rast)
+writeRaster(ports_rast, here('_spatial/moz_ports_6933.tif'), overwrite = TRUE)
+```
+
+The points are there, but they're really small!
 
 # More `subs()` with a simple analysis
 
@@ -295,7 +388,8 @@ shark_richness_df <- am_spp_cells %>%
   summarize(n_sharks = n_distinct(am_sid))
 
 shark_richness_rast <- raster::subs(hcaf_rast_reproj, shark_richness_df, 
-                                    by = 'loiczid', which = 'n_sharks')
+                                    by = 'loiczid', which = 'n_sharks') %>%
+  mask(se_afr_eez_rast)
 plot_rast(shark_richness_rast, moz_eez_sf)
 ```
 
