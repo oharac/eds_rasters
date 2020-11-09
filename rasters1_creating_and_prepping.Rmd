@@ -191,8 +191,7 @@ Often we are given a raster in a resolution and/or coordinate reference system t
 Our AquaMaps data is in a generic lat-long format, but for Mozambique, they prefer to use a different CRS.  Since the results will be used by WCS scientists in Mozambique, let's use the Mozambique preferred CRS.  We will create a new base raster for analysis, at a 10 km resolution equal area, in the same CRS as provided by WCS in a shapefile of SE Africa EEZs.
 
 ``` {r reproject wgs84 raster to mozambique crs}
-se_afr_eez_sf <- read_sf(here('_spatial/moz_eez', 
-                              'se_afr_eez.shp'))
+se_afr_eez_sf <- read_sf(here('_spatial/moz_eez', 'se_afr_eez.shp'))
 # crs(se_afr_eez_sf) 
 # [1] "+proj=cea +lat_ts=30 +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
 # crs(hcaf_rast) 
@@ -234,9 +233,7 @@ We can see there are (at least for these first few cell IDs) 24 or 30 new 10km x
 
 We've been using the base `plot` function to plot our rasters.  It works fine, but is not fancy.  We'll keep using that for simple plots, but we can also use `ggplot2` to plot our rasters, using the `geom_raster()` function.  However, we can't just plop in the raster itself - we have to turn it into a dataframe of coordinates (`ggplot2` likes dataframes!).  Just as before we used `rasterFromXYZ`, here we can use `rasterToPoints()` to go the other direction.
 
-Note: putting rasters into `ggplot2::geom_raster` is not as fast as base `plot`, so generally save it for when you want to make fancy-looking plots.
-
-Note `geom_sf` works with simple features polygons just fine.
+Note `geom_sf` works with simple features polygons just fine.  But high resolution polygons take a while to plot.
 
 ``` {r reproject hammerhead range and plot it}
 ### Let's transform the hammerhead range to the Mozambique CRS.
@@ -292,6 +289,7 @@ plot_rast <- function(rast, sf) {
 
 plot_rast(hh_range_reproj, se_afr_eez_sf)
 ```
+
 Note that the square cells don't line up well with the smoother coastline...
 
 # Rasterizing polygons
@@ -309,7 +307,7 @@ se_afr_eez_df <- se_afr_eez_sf %>%
   as.data.frame() %>%
   select(-geometry)
 moz_eez_sf <- se_afr_eez_sf %>%
-  filter(territory == 'Madagascar')
+  filter(territory == 'Mozambique')
 
 ### default is to convert any cells that fall within a polygon to a value
 ### of 1.  The "field" function lets us choose a value within the attribute
@@ -322,7 +320,7 @@ writeRaster(se_afr_eez_rast, here('_spatial/se_afr_eez_6933.tif'), overwrite = T
 ### Use mask to keep only cells that occur in (i.e., non-NA) SE African EEZs
 hh_range_se_afr <- raster::mask(hh_range_reproj, se_afr_eez_rast)
 
-plot(hh_range_se_afr)
+plot_rast(hh_range_se_afr, moz_eez_sf)
 writeRaster(hh_range_se_afr, here('_spatial/hh_rast_6933.tif'), overwrite = TRUE)
 ```
 
