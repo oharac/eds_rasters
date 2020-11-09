@@ -2,7 +2,15 @@
 title: "EDS Raster workshop 2: analyzing with rasters"
 author: "Casey O'Hara"
 date: "11/2/2020"
-output: html_document
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
 ---
 
 ```{r setup, include=FALSE}
@@ -35,32 +43,29 @@ vec + 20 ### add a scalar
 
 eez_rast <- raster(here('_spatial/se_afr_eez_6933.tif'))
 plot(eez_rast)
-eez_rast     ### note the values: 1 to 9
-eez_rast + 5 ### note the values: 6 to 14
-eez_rast * 2 ### note the values: 2 to 18
+plot(eez_rast * 2)
+plot(10 - eez_rast)
 plot(eez_rast^3)
-### note, plotting linear transformations will look exactly the same, since R
-### chooses the palette to fill out the entire range.  The numbers on the 
-### colorbar would change though!
+
 ```
 
 We can also add, subtract, multiply, or divide by a raster with the same parameters.
 
 ```{r}
-hh_rast <- raster(here('_spatial/hh_rast_6933.tif'))
-plot(hh_rast)
-plot(hh_rast + eez_rast)
+ss_rast <- raster(here('_spatial/ss_rast_6933.tif'))
+plot(ss_rast)
+plot(eez_rast/10 + ss_rast)
 ```
 
 You can also use indexing to change value in one raster based on the value in another raster.  Use the `raster::values()` function to basically convert the raster values into a vector that's less ambiguous to work with.  We already did this to fill in gaps in the silky shark range.
 ```{r}
 x <- values(eez_rast)
 unique(x) ### each number corresponds to an EEZ; Mozambique is 5
-hh_rast2 <- hh_rast ### copy it over
+ss_rast2 <- ss_rast ### copy it over
 
-### keep all shark probabilities in Moz, but set all outside the Moz EEZ to -1
-values(hh_rast2)[values(eez_rast != 5) & !is.na(values(hh_rast))] <- -1
-plot(hh_rast2)
+### keep all shark probabilities in Moz, but set all outside the Moz EEZ to 0
+values(ss_rast2)[values(eez_rast != 5) & !is.na(values(ss_rast))] <- 0
+plot(ss_rast2)
 
 ### could also set non-Moz EEZ values to NA, basically applying a mask.
 ```
@@ -91,17 +96,67 @@ rast_stack <- stack(rast_files)
 plot(rast_stack)
 
 ### or tell it which rasters already in memory to include in the stack.
-rast_stack <- stack(eez_rast, hh_rast, hcaf_rescaled)
+rast_stack <- stack(eez_rast, ss_rast, hcaf_rescaled)
 
 rast_mean <- calc(rast_stack, fun = prod, na.rm = TRUE)
 plot(rast_mean)
 ```
 
+# Distance
+
+Sometimes we need to know the distance from one cell to an important feature.  For example, how far offshore is a particular cell?  How far is a cell from the nearest port? etc.  The `raster::distance()` function is super handy for that.  It calculates a distance for every NA cell to the nearest non-NA cell.
 
 
-- reclassify
-- zonal
+```{r}
+port_rast <- raster(here('_spatial/moz_ports_6933.tif'))
+port_dist_rast <- raster::distance(port_rast)
+plot(port_dist_rast)
 
+### all cells are given a value, but we only care about EEZ cells:
+port_dist_rast <- port_dist_rast %>% mask(eez_rast)
+plot(port_dist_rast)
+```
+
+
+# Reclassify
+
+`raster::reclassify` is similar to `subs()` in that you are replacing existing values with new values.  Here, however, we can identify a range of values to replace with a new single value.  This is great for categorizing a raster.  For example, instead of a probability of 0-100%, maybe we would like to communicate "high", "medium", "low" probabilities (scored as 1, 2, 3 - a raster can only have numeric data, not character).  We need to create a reclassification matrix to do this.
+
+```{r}
+### a vector: 
+###    from  to    class
+m <- c(0.00, 0.33, 1,    
+       0.33, 0.67, 2,    
+       0.67, 1.00, 3)
+### wrap the vector into a matrix by rows
+rcl_mtx <- matrix(m, ncol=3, byrow=TRUE)
+
+### reclassify the silky shark map using this
+ss_reclass <- reclassify(ss_rast, rcl_mtx)
+
+{
+  plot(ss_reclass, legend = FALSE, col = hcl.colors(n = 3)); 
+  legend("topright", legend = c("low", "med", "high"), fill = hcl.colors(n = 3))
+}
+```
+
+# Zonal statistics
+
+The `raster::zonal()` function lets you easily calculate summary statistics of one raster, based on zones in another.  For example, if we wanted to calculate the mean probability of finding silky sharks in any particular cell within the various SE African EEZs, `zonal` is our tool.  It returns a matrix.
+
+```{r}
+mean_prob <- zonal(x = ss_rast, z = eez_rast, fun = 'mean', na.rm = TRUE)
+
+mean_prob_df <- as.data.frame(mean_prob) ### data.frame class, to use in subs()
+
+### Let's substitute these into the EEZ raster to map out the mean probabilities
+mean_prob_rast <- subs(eez_rast, mean_prob_df, by = 'zone', which = 'mean')
+plot(mean_prob_rast, col = hcl.colors(n = 50))
+```
+
+# Rasters as dataframes
+
+Sometimes you just love the tidyverse so much you never want to leave.  So we can take advantage of the fact that a raster is just a vector of numbers mapped to a spatial grid, and put it into a dataframe format where we can use mutate, group_by, summarize, etc.  Operations with the raster format are generally pretty 
 - values to create a dataframe
 
 
