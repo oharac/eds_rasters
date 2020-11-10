@@ -4,7 +4,7 @@ author: "Casey O'Hara"
 date: "11/2/2020"
 output: 
   html_document:
-    code_folding: hide
+    code_folding: show
     toc: true
     toc_depth: 3
     toc_float: yes
@@ -29,11 +29,40 @@ library(here)
  
 # Summary
  
-The previous script focused on creating and developing rasters in preparation for analysis.  Here we'll do a little more , but focus on different ways you can use rasters to perform an analysis.
+The previous script focused on creating and developing rasters in preparation for analysis.  Here we'll focus on different ways you can use rasters to perform an analysis.
+
+``` {r copy plot_rast utility function from first script}
+### The above lines of code to plot the raster with the sf 
+### are coded into a function here, for future ease of use:
+plot_rast <- function(rast, sf, palette = 'viridis', outline = 'red') {
+  ### function to plot a raster with a simple features border overlaid
+  rast_crs <- as.character(crs(rast))
+  sf_crs <- as.character(crs(sf))
+  
+  pal <- hcl.colors(n = 50, palette = palette)
+  
+  fill_name <- names(rast)
+  ### convert raster to points
+  rast_df <- rasterToPoints(rast) %>%
+    as.data.frame() %>%
+    setNames(c('x', 'y', 'z'))
+  
+  ### ggplot the raster points and the simple features
+  x <- ggplot() +
+    geom_raster(data = rast_df, aes(x, y, fill = z)) +
+    scale_fill_gradientn(colors = pal) +
+    geom_sf(data = sf, color = outline, fill = NA) +
+    labs(fill = fill_name)
+  
+  return(x)
+}
+moz_eez_sf <- read_sf(here('_spatial/moz_eez/se_afr_eez.shp')) %>%
+  filter(id == 5)
+```
 
 # Basic raster math
 
-Since rasters are just a grid of numeric values, we can do the same operations on a raster as we can with a basic vector.  Here we'll walk through some basic but totally useless examples based on the rasters we already created.
+Since rasters are just a grid of numeric values, essentially a matrix, we can do the same operations on a raster as we can with a basic vector or matrix.  Here we'll walk through some simple but useless examples based on the rasters we already created.
 
 ```{r}
 ### operating on a vector
@@ -46,6 +75,7 @@ plot(eez_rast)
 plot(eez_rast * 2)
 plot(10 - eez_rast)
 plot(eez_rast^3)
+plot(log(eez_rast))
 
 ```
 
@@ -81,7 +111,7 @@ How can you use this basic raster math?
 ```{r}
 hcaf_rast <- raster(here('_spatial/hcaf_rast_6933.tif'))
 hcaf_rescaled <- hcaf_rast / maxValue(hcaf_rast)
-plot(hcaf_rescaled)
+plot_rast(hcaf_rescaled, moz_eez_sf)
 ```
 
 
@@ -99,7 +129,7 @@ plot(rast_stack)
 rast_stack <- stack(eez_rast, ss_rast, hcaf_rescaled)
 
 rast_mean <- calc(rast_stack, fun = prod, na.rm = TRUE)
-plot(rast_mean)
+plot_rast(rast_mean, moz_eez_sf, palette = 'inferno')
 ```
 
 # Distance
@@ -112,9 +142,13 @@ port_rast <- raster(here('_spatial/moz_ports_6933.tif'))
 port_dist_rast <- raster::distance(port_rast)
 plot(port_dist_rast)
 
+port_df <- port_rast %>%
+  rasterToPoints() %>%
+  as.data.frame()
 ### all cells are given a value, but we only care about EEZ cells:
 port_dist_rast <- port_dist_rast %>% mask(eez_rast)
-plot(port_dist_rast)
+plot_rast(port_dist_rast, moz_eez_sf, palette = 'Berlin') +
+  geom_point(data = port_df, aes(x, y), color = 'green', size = 2)
 ```
 
 
@@ -151,28 +185,96 @@ mean_prob_df <- as.data.frame(mean_prob) ### data.frame class, to use in subs()
 
 ### Let's substitute these into the EEZ raster to map out the mean probabilities
 mean_prob_rast <- subs(eez_rast, mean_prob_df, by = 'zone', which = 'mean')
-plot(mean_prob_rast, col = hcl.colors(n = 50))
+plot_rast(mean_prob_rast, moz_eez_sf, palette = 'Zissou 1')
 ```
 
 # Rasters as dataframes
 
-Sometimes you just love the tidyverse so much you never want to leave.  So we can take advantage of the fact that a raster is just a vector of numbers mapped to a spatial grid, and put it into a dataframe format where we can use mutate, group_by, summarize, etc.  Operations with the raster format are generally pretty 
-- values to create a dataframe
+Sometimes you just love the tidyverse so much you never want to leave.  So we can take advantage of the fact that a raster is just a vector of numbers mapped to a spatial grid, and put it into a dataframe format where we can use mutate, group_by, summarize, etc.  Operations with the raster format are generally pretty efficient and fast.  But if working with very sparse data (e.g., species ranges that are small relative to the size of the global oceans), it may make sense to work with the data in dataframes and csvs, and just assign values spatially at the end.
 
+Here we will create a cell ID raster at the reprojected Mozambique CRS (EPSG 6933), instead of the reprojected HCAF raster from before.  This way, every cell gets its own unique ID.  We will then use `values()` to put rasters into the dataframe as columns, aligned with cell IDs, so we can later use subs() to put the data back into a spatial raster.
+
+Let's put together an analysis where we can identify priority areas for protection.  Some goals, and a quickie math formula to try to quantify these goals:
+
+* prioritize areas with high probability of containing both priority shark spp: hammerhead and silky sharks
+* prioritize areas with a high overall shark species richness 
+* protecting areas closer to landing sites (ports) will impose greater costs on fishermen, but areas farther from ports are more difficult to patrol and enforce protection, so we want to find a happy medium.
+    * the cost function might look something like $aD^2_{port} - bD_{port} + c$, where the first term makes it more expensive to protect the farther out you go (e.g., more gas to patrol), and the second term reflects lower costs imposed on local fishermen the farther you go out.
+
+So we can write this as a rough equation like this, where we want to maximize the outcome:
+$$Priority = \frac{P_{hh} \times P_{ss} \times \text{(relative species richness)}^\alpha}{\text{(cost function)}^\beta}$$
+where $P_x$ is probability of finding shark type $x$, $\alpha$ is how strongly species richness should be weighted (higher $\alpha$, more weight given to overall richness relative to the two priority spp), and $\beta$ is relative weight given to cost function.
+
+Then we can break the priority into quantiles, and highlight the best 10% of area and the worst 10% of area.
+
+```{r}
+cellid_rast <- raster(eez_rast) %>%
+  setValues(1:ncell(eez_rast))
+
+### load the hammerhead and spp richness rasters from the last script...
+hh_rast <- raster(here('_spatial/hh_rast_6933.tif'))
+spp_rich_rast <- raster(here('_spatial/spp_richness_6933.tif'))
+
+shark_df <- data.frame(cell_id  = values(cellid_rast),
+                       p_silky  = values(ss_rast),
+                       p_hhead  = values(hh_rast),
+                       spp_rich = values(spp_rich_rast),
+                       eez      = values(eez_rast),
+                       d_port   = values(port_dist_rast) / 1000) %>%
+  ### now we can drop any cells outside the Mozambique EEZ (id = 5)
+  filter(eez == 5)
+
+### Now lets build our model
+alpha <- 1; beta <- 1; a <- 2; b <- 1000; c <- 2e5
+model_df <- shark_df %>%
+  mutate(priority_spp = p_silky * p_hhead,
+         rel_spp_rich = spp_rich / max(spp_rich, na.rm = TRUE),
+         cost_fxn     = a * d_port^2 - b * d_port + c) %>%
+  mutate(priority = priority_spp * rel_spp_rich^alpha / cost_fxn^beta,
+         pri_qtile = ntile(priority, n = 10))
+
+ggplot(model_df, aes(x = d_port, y = cost_fxn)) +
+  geom_point()
+
+model_map <- subs(cellid_rast, model_df, by = 'cell_id', which = 'priority')
+plot_rast(log10(model_map), moz_eez_sf, palette = 'viridis')
 
 ```
-### distance raster example
-dist_rast <- raster::distance(se_afr_eez_6933_rast)
-plot(dist_rast)
 
-### cell ID example
-cell_id_rast <- se_afr_eez_6933_rast ### initialize it with a raster with the right resolution, CRS, and extent
-values(cell_id_rast) <- 1:ncell(cell_id_rast) ### put in unique numbers for cell values
-plot(cell_id_rast)
-
-### raster to polygon example
-hcaf_moz_poly <- raster::rasterToPolygons(hcaf_moz_rast, dissolve = FALSE)
-se_afr_eez_poly <- raster::rasterToPolygons(se_afr_eez_rast, dissolve = TRUE)
-plot(se_afr_eez_poly)
+``` {r}
+x <- model_df %>%
+  filter(pri_qtile %in% c(1, 10))
+priority_map <- subs(cellid_rast, x, by = 'cell_id', which = 'pri_qtile')
+plot_rast(priority_map, moz_eez_sf, palette = 'RdYlGn', outline = 'yellow') +
+  geom_point(data = port_df, aes(x, y), shape = 21, color = 'black', fill = 'white', size = 2)
 ```
+
+
+# Raster to polygons
+
+Most of the time we would be turning polygons into rasters, to analyze with other rasters.  But for their analysis, the Future4Fins group is planning to use `prioritizr`, essentially an R implementation of the conservation planning software Marxan.  But `prioritizr` wants planning unit data as polygons, not a raster!  Let's turn our Silky Shark raster into polygons, each cell becoming a (square-shaped) polygon of its own.  NOTE: for the purposes of this workshop, let's use the half-degree cells version - because at 10 km cells, this might be a bit processing intensive, and the results won't look good on a plot.  For the real analysis they could consider the 10 km x 10 km cells to get a better resolution.
+
+The rasterToPolygons function returns an old school Spatial (`sp`) object, so we can use the `st_as_sf()` (basically `as(x, 'sf')`) function to turn it into a happy little Simple Features `sf` object!  And we can easily write this out as a geopackage `.gpkg` file.
+
+``` {r}
+### load the half-degree silky shark data
+ss_rast_hcaf <- raster(here('_spatial/silkyshark_rast.tif'))
+ss_poly_sp <- raster::rasterToPolygons(ss_rast_hcaf, dissolve = FALSE)
+ss_poly_sf <- st_as_sf(ss_poly_sp)
+
+ggplot(ss_poly_sf) +
+  geom_sf(aes(fill = silkyshark_rast), size = .1)
+write_sf(ss_poly_sf, here('_spatial/silkyshark_prob.gpkg'))
+```
+
+# Review: what have we done in this script?
+
+* Practiced some basic raster math
+* Used the `calc()` function to calculate across layers of a `RasterStack`
+* Created a raster of distance from a cell to the nearest non-NA cell
+* Used `reclassify()` to replace continuous values in a raster with discrete categories, similar to `subs()`
+* Used `zonal()` to calculate zonal statistics (e.g., mean value across an EEZ)
+* Put a bunch of rasters into a dataframe, calculated a complicated model, and then put the results back into a raster using `subs()`
+* Converted a raster back into polygons (both Spatial `sp` object and Simple Features `sf` object) and saved it.
+* Ate tiny sandwiches at home (optional)
 

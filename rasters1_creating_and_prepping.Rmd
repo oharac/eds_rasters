@@ -4,7 +4,7 @@ author: "Casey O'Hara"
 date: "11/2/2020"
 output: 
   html_document:
-    code_folding: hide
+    code_folding: show
     toc: true
     toc_depth: 3
     toc_float: yes
@@ -29,7 +29,7 @@ library(here)
 
 # Session summary
 
-For this EcoDataScience session, we will cover some basics of working with spatial data presented in a gridded format, i.e., rasters.  This is distinct from vector data, such as points, lines, and polygons, which are not constrained to a grid but have problems of their own.  This will be an overview of rasters, introducing basic concepts of creating them, modifying them, and doing basic analyses wih them.  This first script focuses on creating and preparing rasters to be used in an analysis.
+For this EcoDataScience session, we will cover some basics of working with spatial data presented in a gridded format, i.e., rasters, using the `raster` package.  This is distinct from vector data, such as points, lines, and polygons, which are not constrained to a grid but have problems of their own.  This will be an overview of rasters, introducing basic concepts of creating them, modifying them, and doing basic analyses with them.  This first script focuses on creating and preparing rasters to be used in a simple analysis.
 
 NOTE: This will not use the `stars` package, which is a massive overhaul of raster-style data for R. Because that's still in the development process, and the `raster` package is very mature, we'll use `raster` for this workshop.  But `stars` looks like it's gonna be really cool!
 
@@ -330,12 +330,12 @@ This time, however, our data is not cell IDs (discrete), but probabilities (cont
 x <- values(ss_range_rast) ### values accesses the raster values as a vector
 ### identify the indices in the vector where NA, and replace with zero
 values(ss_range_rast)[is.na(values(ss_range_rast))] <- 0
-plot(ss_range_rast)
+plot_rast(ss_range_rast, moz_eez_sf)
 
 ### now reproject, crop
 ss_range_se_afr <- projectRaster(ss_range_rast, hcaf_rast_reproj, method = 'bilinear') %>%
   mask(se_afr_eez_rast)
-plot(ss_range_se_afr)
+plot_rast(ss_range_se_afr, moz_eez_sf)
 ### compare ngb and bilinear
 
 writeRaster(ss_range_se_afr, here('_spatial/ss_rast_6933.tif'), overwrite = TRUE)
@@ -366,7 +366,7 @@ class(ports_sp)
 crs(ports_sp)
 
 ports_rast <- raster::rasterize(ports_sp, hcaf_rast_reproj, field = 'OBJECTID_1')
-plot(ports_rast)
+plot_rast(ports_rast, moz_eez_sf)
 writeRaster(ports_rast, here('_spatial/moz_ports_6933.tif'), overwrite = TRUE)
 ```
 
@@ -374,19 +374,24 @@ The points are there, but they're really small!
 
 # More `subs()` with a simple analysis
 
-Let's make a species richness map, by counting how many distinct shark species can be found in each cell.  To do this, we can use the dataframe of shark species to cells, `am_spp_cells`.  For each cell, we can count up how many distinct species IDs occur.
+Let's make a species richness map, by counting how many distinct shark species can be found in each cell.  To do this, we can use the dataframe of shark species to cells, `am_spp_cells`.  For each cell, we can count up how many distinct species IDs occur.  Assign this to the 0.5° cells, then reproject with `method = 'bilinear'`, and write it out.
 
-Note: this ignores probability - so even 1% probability is counted... but that's easy to fix! (i.e., `filter(prob >= 0.50)` to keep cells where probability is 50% or higher)
+Note: let's say for a shark species to count in a cell, there must be greater than 50% probability.
+
 ``` {r species richness map}
 ### map out the shark species richness
 shark_richness_df <- am_spp_cells %>%
+  filter(prob >= .50) %>%
   group_by(loiczid) %>%
   summarize(n_sharks = n_distinct(am_sid))
 
-shark_richness_rast <- raster::subs(hcaf_rast_reproj, shark_richness_df, 
+shark_richness_rast <- raster::subs(hcaf_rast, shark_richness_df, 
                                     by = 'loiczid', which = 'n_sharks') %>%
+  projectRaster(hcaf_rast_reproj, method = 'bilinear') %>%
   mask(se_afr_eez_rast)
+
 plot_rast(shark_richness_rast, moz_eez_sf)
+writeRaster(shark_richness_rast, here('_spatial/spp_richness_6933.tif'), overwrite = TRUE)
 ```
 
 # Review: what have we done so far?
