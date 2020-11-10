@@ -82,6 +82,8 @@ plot(log(eez_rast))
 We can also add, subtract, multiply, or divide by a raster with the same parameters.
 
 ```{r}
+vec2 <- 100:109
+vec + vec2
 ss_rast <- raster(here('_spatial/ss_rast_6933.tif'))
 plot(ss_rast)
 plot(eez_rast/10 + ss_rast)
@@ -122,20 +124,19 @@ The `calc` function is handy for more complex calculations.  It is especially us
 ```{r}
 ### tell it a vector of files to include in the stack.
 rast_files <- list.files(here('_spatial'), pattern = '_6933.tif', full.names = TRUE)
-rast_stack <- stack(rast_files)
+rast_stack <- raster::stack(rast_files)
 plot(rast_stack)
 
 ### or tell it which rasters already in memory to include in the stack.
 rast_stack <- stack(eez_rast, ss_rast, hcaf_rescaled)
 
-rast_mean <- calc(rast_stack, fun = prod, na.rm = TRUE)
-plot_rast(rast_mean, moz_eez_sf, palette = 'inferno')
+rast_prod <- calc(rast_stack, fun = prod, na.rm = TRUE)
+plot_rast(rast_prod, moz_eez_sf, palette = 'inferno')
 ```
 
 # Distance
 
 Sometimes we need to know the distance from one cell to an important feature.  For example, how far offshore is a particular cell?  How far is a cell from the nearest port? etc.  The `raster::distance()` function is super handy for that.  It calculates a distance for every NA cell to the nearest non-NA cell.
-
 
 ```{r}
 port_rast <- raster(here('_spatial/moz_ports_6933.tif'))
@@ -165,6 +166,7 @@ m <- c(0.00, 0.33, 1,
 ### wrap the vector into a matrix by rows
 rcl_mtx <- matrix(m, ncol=3, byrow=TRUE)
 
+plot_rast(ss_rast, moz_eez_sf)
 ### reclassify the silky shark map using this
 ss_reclass <- reclassify(ss_rast, rcl_mtx)
 
