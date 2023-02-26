@@ -139,7 +139,7 @@ writeRaster(pct_ocean_rast, here('_spatial/ocean_rast.tif'),
 
 Note: we could have used `terra::rast(type = 'xyz')` here too, simply using `x` = longitude, `y` = latitude, and percent ocean area as the `z` value.
 
-# Practice with `subs()` on real data
+# Practice with `subst()` on real data
 
 The nice thing about `terra::subst()` is that we can do a lot of work in the Tidyverse and then simply plop the results into a previously generated raster, based on cell IDs.
 
@@ -173,7 +173,7 @@ hh_range_rast <- subst(hcaf_rast, ,
                       others = NA)
 plot(hh_range_rast)
 
-### that's way more map space than we need!  raster::trim() can trim it to remove
+### that's way more map space than we need!  terra::trim() can trim it to remove
 ### the whitespace
 hh_range_rast <- hh_range_rast %>%
   terra::trim()
@@ -193,7 +193,7 @@ ss_id <- 'Fis-23054'
 ss_cells_df <- am_spp_cells %>%
   filter(am_sid == ss_id)
 
-### use raster::subs() to substitute in values for others
+### use terra::subst() to substitute in values for others
 ss_range_rast <- subst(hcaf_rast, 
                        from = ss_cells_df$loiczid,
                        to   = ss_cells_df$prob,
@@ -228,7 +228,7 @@ plot(hcaf_rast_mask)
 ### Then, crop the global hcaf raster down to the same extent as our range map
 hcaf_rast_crop <- terra::crop(hcaf_rast_mask, hh_range_rast)
 
-### Next use raster::projectRaster to change the CRS and resolution
+### Next use terra::project to change the CRS and resolution
 hcaf_rast_reproj <- project(x = hcaf_rast_crop, 
                             y = crs(se_afr_eez_sf),
                             method = 'near', ### nearest neighbor
@@ -266,8 +266,8 @@ Note `geom_sf` works with simple features polygons just fine.  But high resoluti
 ``` {r reproject hammerhead range and plot it}
 ### Let's transform the hammerhead range to the Mozambique CRS.
 ### could do either of these:
-### * projectRaster() from half-degree cells to 10 km cells
-### * subs() into the new projected hcaf 10 km cell raster, using the cell IDs
+### * project() from half-degree cells to 10 km cells
+### * subst() into the new projected hcaf 10 km cell raster, using the cell IDs
 hh_range_reproj <- subst(hcaf_rast_reproj,
                          from = hh_cells_df$loiczid, 
                          to = hh_cells_df$prob,
